@@ -6,6 +6,9 @@ from tensorflow.keras import layers
 from tensorflow.keras.callbacks import EarlyStopping
 from sklearn.preprocessing import StandardScaler
 
+scaler_X = StandardScaler()
+scaler_y = StandardScaler()
+
 def true_data(df):
     return df[["consumption_kwh"]].values
 
@@ -18,8 +21,6 @@ def read_data():
 
 def load_training_data(df, seed=42):
     np.random.seed(seed)
-    scaler_X = StandardScaler()
-    scaler_y = StandardScaler()
 
     X_train = scaler_X.fit_transform(df[["date_ordinal"]].values)
     y_train = scaler_y.fit_transform(true_data(df))
@@ -46,31 +47,62 @@ def train_model(model, X_train, y_train, epochs=100, batch_size=32):
 def evaluate_model(model, X_test):
     return model.predict(X_test)
 
-def visualize_results(X_train, y_train, X_test, y_pred, df):
-    scaler_X = StandardScaler()
-    scaler_y = StandardScaler()
-
+def train_scalers():
     scaler_X.fit(df[["date_ordinal"]])  # Навчити повторно на тих самих даних
     scaler_y.fit(df[["consumption_kwh"]])
-    
-    X_train_ordinal = scaler_X.inverse_transform(X_train).flatten()
-    X_test_ordinal = scaler_X.inverse_transform(X_test).flatten()
 
-    X_train_dates = [pd.Timestamp.fromordinal(int(i)) for i in X_train_ordinal]
-    X_test_dates = [pd.Timestamp.fromordinal(int(i)) for i in X_test_ordinal]
+def inverse_transform_X(X):
+    X_ordinal = scaler_X.inverse_transform(X).flatten()
 
-    y_train_inv = scaler_y.inverse_transform(y_train)
-    y_pred_inv = scaler_y.inverse_transform(y_pred)
+    return X_ordinal
 
+def convert_to_date(X_ordinal):
+    X_dates = [pd.Timestamp.fromordinal(int(i)) for i in X_ordinal]
+
+    return X_dates
+
+def inverse_transform_y(y):
+    y_inv = scaler_y.inverse_transform(y)
+
+    return y_inv
+
+def get_true_values(X_test_dates):
     df_indexed = df.set_index("date")
-
     y_true = []
+
     for date in X_test_dates:
         if date in df_indexed.index:
             y_true.append(df_indexed.loc[date, "consumption_kwh"])
         else:
             y_true.append(np.nan)  # Якщо немає такого дня — NaN
 
+    return y_true
+
+def inverse_transform(X_train, X_test, y_train, y_pred):
+    X_train_ordinal = inverse_transform_X(X_train)
+    X_test_ordinal = inverse_transform_X(X_test)
+
+    y_train_inv = inverse_transform_y(y_train)
+    y_pred_inv = inverse_transform_y(y_pred)
+
+    return X_train_ordinal, X_test_ordinal, y_train_inv, y_pred_inv
+
+def convert_all_to_date(X_train, X_test):
+    X_train_ordinal = inverse_transform_X(X_train)
+    X_test_ordinal = inverse_transform_X(X_test)
+    
+    X_train_dates = convert_to_date(X_train_ordinal)
+    X_test_dates = convert_to_date(X_test_ordinal)
+
+    return X_train_dates, X_test_dates
+
+def inverse_transform_y_all(y_train, y_pred):
+    y_train_inv = inverse_transform_y(y_train)
+    y_pred_inv = inverse_transform_y(y_pred)
+
+    return y_train_inv, y_pred_inv
+
+def visualize_results(X_train, y_train, X_test, y_pred, y_true):
     plt.figure(figsize=(10, 6))
     plt.scatter(X_train_dates, y_train_inv, label='Training Data', alpha=0.3)
     plt.plot(X_test_dates, y_true, color='green', label='True Values', linestyle="dashed")
@@ -89,33 +121,29 @@ def predict(model, X_test, scaler_X, scaler_y):
 
 if __name__ == "__main__":
     df = read_data()
-    x_train, y_train = load_training_data(df)
+    X_train, y_train = load_training_data(df)
     
-    scaler_X = StandardScaler()
-    scaler_y = StandardScaler()
-    x_train = scaler_X.fit_transform(df[["date_ordinal"]].values)
+    X_train = scaler_X.fit_transform(df[["date_ordinal"]].values)
     y_train = scaler_y.fit_transform(true_data(df))
 
-    X_test = np.linspace(x_train[:, 0].min(), x_train[:, 0].max(), 100).reshape(-1, 1)
+    X_test = np.linspace(X_train[:, 0].min(), X_train[:, 0].max(), 100).reshape(-1, 1)
 
     model = build_model()
 
-    train_model(model, x_train, y_train, epochs=100)
+    train_model(model, X_train, y_train, epochs=100)
 
     y_pred = evaluate_model(model, X_test)
 
-    visualize_results(x_train, y_train, X_test, y_pred, df)
+    train_scalers()
 
-    x_new = 738791  # Example date in ordinal format
-    y_new = predict(model, x_new, scaler_X, scaler_y)
+    X_train_dates, X_test_dates = convert_all_to_date(X_train, X_test)
+    y_train_inv, y_pred_inv = inverse_transform_y_all(y_train, y_pred)
+    y_true = get_true_values(X_test_dates)
 
-    print(f"Predicted consumption for date = {x_new}: {y_new}")
+    visualize_results(X_train_dates, y_train_inv, X_test_dates, y_pred_inv, y_true)
 
-# X_test = np.linspace(X[:, 0].min(), X[:, 0].max(), 100).reshape(-1, 1)
+    x_new_ordinal = 738791
+    y_new = predict(model, x_new_ordinal, scaler_X, scaler_y)
+    x_new_date = convert_to_date([x_new_ordinal])[0]
 
-
-# X_test_dates = [pd.Timestamp.fromordinal(int(d)) for d in X_test.flatten()]
-
-# sorted_indices = np.argsort(X.flatten())
-# X_sorted = X.flatten()[sorted_indices]
-# y_sorted = y.values.flatten()[sorted_indices]
+    print(f"Predicted consumption for date = {x_new_date}: {y_new}")
